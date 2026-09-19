@@ -210,6 +210,28 @@ def _selected_jobs(config: BenchmarkConfig, selected: list[str] | None) -> list[
     return [job for job in jobs if job.job_id in wanted]
 
 
+def _manifest_path(config: BenchmarkConfig, split: str) -> Path:
+    return config.features_dir / f"manifest_{split}_{config.camera}.json"
+
+
+def preflight(config: BenchmarkConfig, *, evaluation: bool) -> None:
+    """Fail before launching a job when benchmark preprocessing is incomplete."""
+    required = [_manifest_path(config, config.train_split), config.split_manifest]
+    if evaluation:
+        required.append(_manifest_path(config, config.test_split))
+    missing = [path for path in required if not path.is_file()]
+    if not missing:
+        return
+    lines = "\n".join(f"  - {path}" for path in missing)
+    raise SystemExit(
+        "benchmark preflight failed; required generated files are missing:\n"
+        f"{lines}\n\n"
+        "Download/validate the benchmark data and preprocess both splits before "
+        "training. See 'Fixed train/test factorial benchmark' in "
+        "baseline-cnn-tcn/README.md."
+    )
+
+
 def _command_text(command: list[str]) -> str:
     return subprocess.list2cmdline(command)
 
@@ -258,6 +280,8 @@ def run_jobs(
     resume: bool,
     dry_run: bool,
 ) -> None:
+    if not dry_run:
+        preflight(config, evaluation=False)
     if not dry_run:
         config.output_root.mkdir(parents=True, exist_ok=True)
         train_manifest = (
@@ -419,6 +443,8 @@ def collect(
     force: bool,
     dry_run: bool,
 ) -> None:
+    if not dry_run:
+        preflight(config, evaluation=True)
     incomplete = [job.job_id for job in jobs if not (config.run_dir(job) / "best.pt").exists()]
     if incomplete:
         raise SystemExit(

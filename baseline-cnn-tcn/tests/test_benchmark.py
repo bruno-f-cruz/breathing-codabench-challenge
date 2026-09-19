@@ -11,6 +11,7 @@ from breathing_cnn_tcn.benchmark import (
     collect,
     evaluate_command,
     load_config,
+    preflight,
     run_jobs,
     train_command,
 )
@@ -79,6 +80,7 @@ class BenchmarkConfigTests(unittest.TestCase):
             isolated = replace(config, output_root=Path(temporary) / "benchmark")
             job = isolated.jobs()[0]
             with (
+                patch("breathing_cnn_tcn.benchmark.preflight"),
                 patch("breathing_cnn_tcn.benchmark._git_provenance", return_value={}),
                 patch("breathing_cnn_tcn.benchmark.subprocess.run") as run,
             ):
@@ -120,12 +122,25 @@ class BenchmarkConfigTests(unittest.TestCase):
                     }
                 )
             )
-            collect(isolated, [job], force=False, dry_run=False)
+            with patch("breathing_cnn_tcn.benchmark.preflight"):
+                collect(isolated, [job], force=False, dry_run=False)
             result_path = isolated.output_root / "results.json"
             result = json.loads(result_path.read_text())
             self.assertEqual(len(result["summary_by_seed"]), 2)
             self.assertEqual(len(result["metrics_per_session"]), 1)
             self.assertFalse(list(isolated.output_root.glob("*.csv")))
+
+    def test_preflight_fails_before_training_without_generated_manifest(self):
+        config = load_config(DEFAULT_CONFIG)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            isolated = replace(
+                config,
+                features_dir=root / "features",
+                split_manifest=root / "split.json",
+            )
+            with self.assertRaisesRegex(SystemExit, "benchmark preflight failed"):
+                preflight(isolated, evaluation=False)
 
 
 class BenchmarkDataTests(unittest.TestCase):
