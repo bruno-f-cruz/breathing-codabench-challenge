@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from breathing_cnn_tcn.benchmark import (
-    CUBLAS_WORKSPACE_CONFIG,
     DEFAULT_CONFIG,
     _across_seed_rows,
     collect,
@@ -87,10 +86,6 @@ class BenchmarkConfigTests(unittest.TestCase):
             ):
                 run_jobs(isolated, [job], resume=False, dry_run=False)
             run.assert_called_once()
-            self.assertEqual(
-                run.call_args.kwargs["env"]["CUBLAS_WORKSPACE_CONFIG"],
-                CUBLAS_WORKSPACE_CONFIG,
-            )
             self.assertFalse(isolated.run_dir(job).exists())
             self.assertTrue(
                 (isolated.output_root / "jobs" / f"{job.job_id}.json").exists()

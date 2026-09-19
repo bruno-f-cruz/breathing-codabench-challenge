@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import tomllib
@@ -30,7 +29,6 @@ import numpy as np
 
 DEFAULT_CONFIG = Path("baseline-cnn-tcn/artifacts/benchmark.toml")
 METRICS = ("correlation", "inhale_f1", "exhale_f1", "kl_ibi")
-CUBLAS_WORKSPACE_CONFIG = ":4096:8"
 PRECHECKPOINT_FILES = {"args.json", "last.pt.tmp", "best.pt.tmp"}
 
 
@@ -71,7 +69,6 @@ class BenchmarkConfig:
     steps_per_epoch: int
     device: str
     amp: str
-    deterministic: bool
     representations: tuple[str, ...]
     seeds: tuple[int, ...]
     objectives: tuple[Objective, ...]
@@ -113,7 +110,6 @@ def load_config(path: Path) -> BenchmarkConfig:
         steps_per_epoch=int(benchmark.get("steps_per_epoch", 200)),
         device=str(benchmark.get("device", "cuda")),
         amp=str(benchmark.get("amp", "bf16")),
-        deterministic=bool(benchmark.get("deterministic", True)),
         representations=tuple(str(x) for x in benchmark["representations"]),
         seeds=tuple(int(x) for x in benchmark["seeds"]),
         objectives=objectives,
@@ -168,8 +164,6 @@ def train_command(config: BenchmarkConfig, job: Job, *, resume: bool) -> list[st
         "--amp",
         config.amp,
     ]
-    if config.deterministic:
-        command.append("--deterministic")
     if resume:
         command.append("--resume")
     return command
@@ -237,17 +231,6 @@ def preflight(config: BenchmarkConfig, *, evaluation: bool) -> None:
 
 def _command_text(command: list[str]) -> str:
     return subprocess.list2cmdline(command)
-
-
-def _job_environment(config: BenchmarkConfig) -> dict[str, str]:
-    """Build the child environment required by strict CUDA determinism."""
-    environment = os.environ.copy()
-    if config.deterministic:
-        # PyTorch requires this to exist before CUDA/cuBLAS is initialized.
-        # Passing it through subprocess.run is earlier and more reliable than
-        # trying to set it after torch has begun executing in the child.
-        environment["CUBLAS_WORKSPACE_CONFIG"] = CUBLAS_WORKSPACE_CONFIG
-    return environment
 
 
 def _sha256_if_present(path: Path) -> str | None:
@@ -361,7 +344,7 @@ def run_jobs(
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         metadata_path.write_text(json.dumps(metadata, indent=2))
         try:
-            subprocess.run(command, check=True, env=_job_environment(config))
+            subprocess.run(command, check=True)
         except BaseException:
             metadata["status"] = "failed"
             metadata["finished_at"] = datetime.now(UTC).isoformat()

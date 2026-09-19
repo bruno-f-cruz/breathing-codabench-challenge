@@ -14,7 +14,6 @@ epochs = 200
 steps_per_epoch = 200
 device = "cuda"
 amp = "bf16"
-deterministic = true
 
 representations = ["gray", "diff", "flow", "gray+flow"]
 seeds = [17, 42, 101, 202, 314]
