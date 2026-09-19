@@ -1,0 +1,28 @@
+[benchmark]
+name = "input-objective-v1"
+packaged_root = "data/benchmark"
+features_dir = "data/features-benchmark"
+split_manifest = "data/benchmark/split.json"
+output_root = "benchmarks/input-objective-v1"
+train_split = "train"
+test_split = "test"
+camera = "face"
+
+# Fixed-budget training uses every labelled training recording. Test data is
+# never used for early stopping or checkpoint selection.
+epochs = 200
+steps_per_epoch = 200
+device = "cuda"
+amp = "bf16"
+deterministic = true
+
+representations = ["gray", "diff", "flow", "gray+flow"]
+seeds = [17, 42, 101, 202, 314]
+
+[objectives.signal]
+w_corr = 1.0
+w_onset = 0.0
+
+[objectives.multitask]
+w_corr = 1.0
+w_onset = 0.5

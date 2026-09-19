@@ -129,6 +129,65 @@ uv run python -m breathing_cnn_tcn.evaluate --checkpoint runs_all/baseline-cnn-t
 Those sessions are consumable: every look influences what you try next, so score
 a model you are ready to commit to, not every intermediate.
 
+## Fixed train/test factorial benchmark
+
+The organizer benchmark is separate from the legacy three-session development
+holdout above. It trains on all 16 labelled training recordings for a fixed
+budget, then evaluates on 12 independent test recordings. The test manifest
+retains two important strata: six recordings from new animals and six new dates
+from animals represented in training.
+
+The checked-in [`benchmark.toml`](artifacts/benchmark.toml) expands four input
+representations (`gray`, `diff`, `flow`, `gray+flow`) by two objectives
+(signal-only and signal+onset multitask) by five seeds: 40 jobs. Add
+`"gray+diff+flow"` to `representations` if the current all-channel default should
+be included as a fifth reference level.
+
+Download only the face camera and overlay the private test thermistors without
+flattening the train/test directories:
+
+```bash
+uv run --package breathing-cnn-tcn python -m breathing_cnn_tcn.benchmark_data download
+uv run --package breathing-cnn-tcn python -m breathing_cnn_tcn.benchmark_data validate
+```
+
+Preprocess both splits. Even though the reconstructed test directory carries
+thermistors, `preprocess` deliberately creates targets only for `train`; test
+truth remains outside the training feature manifest.
+
+```bash
+uv run --package breathing-cnn-tcn python -m breathing_cnn_tcn.preprocess \
+  --packaged-root data/benchmark --split train \
+  --out-dir data/features-benchmark \
+  --boxes-json baseline-cnn-tcn/artifacts/session_boxes_face.json
+
+uv run --package breathing-cnn-tcn python -m breathing_cnn_tcn.preprocess \
+  --packaged-root data/benchmark --split test \
+  --out-dir data/features-benchmark \
+  --boxes-json baseline-cnn-tcn/artifacts/session_boxes_face.json
+```
+
+Inspect the expansion, run it, and collect session-level results:
+
+```bash
+uv run --package breathing-cnn-tcn python -m breathing_cnn_tcn.benchmark plan
+uv run --package breathing-cnn-tcn --extra train python -m breathing_cnn_tcn.benchmark run
+uv run --package breathing-cnn-tcn --extra train python -m breathing_cnn_tcn.benchmark collect
+```
+
+`run --dry-run` prints commands without touching the output directory. Rerunning
+`run` automatically resumes a partial job from its `last.pt`; use `--no-resume`
+to make partial output an error. Checkpoints include optimizer, scheduler, EMA,
+mixed-precision scaler, global step, and Python/NumPy/PyTorch RNG states. At most
+the unfinished epoch is repeated after a process or machine crash. Exact per-job
+directories prevent one sweep member from resuming another.
+
+`collect` writes one structured `results.json` containing per-session metrics,
+per-seed summaries, and mean/SD/median/min/max summaries across seeds for the
+combined test set and both animal-generalization strata. Each run also retains
+its complete `evaluation.json`. Individual models remain separate; collection
+does not silently turn the five seeds into an ensemble.
+
 ### Choosing crops
 
 One box per session, placed by hand. There is no detector and no fallback:

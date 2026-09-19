@@ -7,12 +7,12 @@ Anything less faithful would report a number the leaderboard will not reproduce.
 
 What this is for
 ----------------
-The reserved sessions in ``baseline-cnn-tcn/artifacts/holdout_sessions.json``
-are the only clips
-nothing trained on, validated on, or selected a checkpoint against, so they are
-the one unbiased estimate available locally.  That also makes them consumable:
-every look influences what gets tried next, so the estimate degrades with reuse.
-Score a model you are ready to commit to, not every intermediate.
+Two protocols are supported. Legacy development runs score sessions reserved in
+``baseline-cnn-tcn/artifacts/holdout_sessions.json``. The factorial benchmark
+instead trains on the complete ``train`` split and supplies the organizer's
+``split.json`` while scoring the independent ``test`` split. In either protocol
+the estimate is consumable: every look influences what gets tried next, so
+score models only after the training choices are frozen.
 
 Several ``--checkpoint`` paths are ensembled, each z-scored before averaging --
 the models are trained on a correlation loss that leaves output scale free, so
@@ -116,6 +116,53 @@ def truth_frame(packaged_root: Path, split: str, session_idx: int, part: int):
     return pd.read_parquet(path)
 
 
+METRIC_FIELDS = ("correlation", "inhale_f1", "exhale_f1", "kl_ibi")
+
+
+def summarise_rows(rows: list[dict]) -> dict[str, float]:
+    """Mean and spread for metric rows, ignoring undefined values."""
+    summary: dict[str, float] = {}
+    for field in METRIC_FIELDS:
+        values = np.array(
+            [r[field] for r in rows if r.get(field) is not None], dtype=float
+        )
+        values = values[np.isfinite(values)]
+        summary[field] = float(values.mean()) if len(values) else float("nan")
+        summary[f"{field}_sd"] = (
+            float(values.std(ddof=1)) if len(values) > 1 else float("nan")
+        )
+        summary[f"{field}_n"] = len(values)
+    return summary
+
+
+def aggregate_sessions(rows: list[dict]) -> list[dict]:
+    """Average clip metrics within session, the independent sampling unit."""
+    sessions: list[dict] = []
+    for session_idx in sorted({int(r["session_idx"]) for r in rows}):
+        members = [r for r in rows if int(r["session_idx"]) == session_idx]
+        sessions.append(
+            {"session_idx": session_idx, "n_clips": len(members)}
+            | {field: summarise_rows(members)[field] for field in METRIC_FIELDS}
+        )
+    return sessions
+
+
+def load_test_strata(path: Path | None) -> dict[str, list[int]]:
+    """Map the organizer split manifest to stable benchmark stratum names."""
+    if path is None:
+        return {}
+    data = json.loads(path.read_text())
+
+    def indices(key: str) -> list[int]:
+        return sorted(int(item["video_index"]) for item in data.get(key, []))
+
+    strata = {
+        "new_animals": indices("val_new_animals"),
+        "known_animals_new_date": indices("val_held_out"),
+    }
+    return {name: values for name, values in strata.items() if values}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Score checkpoints on held-out clips.")
     parser.add_argument("--checkpoint", type=Path, nargs="+", required=True)
@@ -127,6 +174,12 @@ def main() -> None:
         "--holdout-json",
         type=Path,
         default=Path("baseline-cnn-tcn/artifacts/holdout_sessions.json"),
+    )
+    parser.add_argument(
+        "--split-manifest",
+        type=Path,
+        help="Organizer split.json. When --sessions is omitted, score every "
+        "test video_index and report new-animal and known-animal/new-date strata.",
     )
     parser.add_argument(
         "--sessions",
@@ -177,8 +230,11 @@ def main() -> None:
     device = torch.device(args.device)
     amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "off": None}[args.amp]
 
+    strata = load_test_strata(args.split_manifest)
     sessions = args.sessions
-    if sessions is None:
+    if sessions is None and strata:
+        sessions = sorted({i for values in strata.values() for i in values})
+    elif sessions is None:
         sessions = json.loads(args.holdout_json.read_text())["test_sessions"]
     sessions = set(sessions)
 
@@ -188,8 +244,17 @@ def main() -> None:
         model, mean, std, state = load_checkpoint(path, device)
         models.append((model, mean, std))
         reserved = set(state.get("test_sessions") or [])
-        # A checkpoint that trained on a session cannot honestly score it.
-        trained_on |= sessions - reserved
+        train_split = state.get("train_split") or state.get("args", {}).get("split")
+        trained_sessions = set(state.get("trained_sessions") or [])
+        if train_split is not None and trained_sessions:
+            # Numeric session indices restart in each packaged split. Only an
+            # overlap within the same split is leakage.
+            if args.split == train_split:
+                trained_on |= sessions & trained_sessions
+        elif train_split is None or args.split == train_split:
+            # Backwards compatibility for checkpoints created before split
+            # provenance was recorded; those only supported the train split.
+            trained_on |= sessions - reserved
         print(
             f"loaded {path}  epoch {state.get('epoch')}  "
             f"reserved {sorted(reserved) or 'none recorded'}"
@@ -243,6 +308,7 @@ def main() -> None:
         row = {
             "clip_id": entry.clip_id,
             "session_idx": entry.session_idx,
+            "part": entry.part,
         } | score.to_dict()
         rows.append(row)
         if args.plot:
@@ -255,17 +321,23 @@ def main() -> None:
         )
 
     print("-" * len(header))
-    summary = {}
-    for field in (
-        "correlation",
-        "inhale_f1",
-        "exhale_f1",
-        "kl_ibi",
-    ):
-        values = np.array([r[field] for r in rows], dtype=float)
-        values = values[np.isfinite(values)]
-        summary[field] = float(values.mean()) if len(values) else float("nan")
-        summary[f"{field}_sd"] = float(values.std()) if len(values) else float("nan")
+    # Keep the historical clip-level summary, and add the academically correct
+    # session-level result used by the benchmark harness.
+    summary = summarise_rows(rows)
+    session_rows = aggregate_sessions(rows)
+    summary_by_session = summarise_rows(session_rows)
+    stratum_results = {}
+    if strata:
+        for name, indices in strata.items():
+            members = [r for r in session_rows if r["session_idx"] in set(indices)]
+            stratum_results[name] = {
+                "sessions": indices,
+                "summary": summarise_rows(members),
+            }
+        stratum_results["all"] = {
+            "sessions": sorted(sessions),
+            "summary": summary_by_session,
+        }
     print(
         f"{'mean':25s}{summary['correlation']:+10.3f}"
         f"{summary['inhale_f1']:8.3f}{summary['exhale_f1']:8.3f}{summary['kl_ibi']:8.3f}"
@@ -290,6 +362,9 @@ def main() -> None:
                     "sessions": sorted(sessions),
                     "clips": rows,
                     "summary": summary,
+                    "per_session": session_rows,
+                    "summary_by_session": summary_by_session,
+                    "strata": stratum_results,
                     "composite": composite,
                 },
                 indent=2,
