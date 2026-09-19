@@ -31,6 +31,7 @@ import numpy as np
 DEFAULT_CONFIG = Path("baseline-cnn-tcn/artifacts/benchmark.toml")
 METRICS = ("correlation", "inhale_f1", "exhale_f1", "kl_ibi")
 CUBLAS_WORKSPACE_CONFIG = ":4096:8"
+PRECHECKPOINT_FILES = {"args.json", "last.pt.tmp", "best.pt.tmp"}
 
 
 def _slug(value: str) -> str:
@@ -324,11 +325,24 @@ def run_jobs(
         if best.exists():
             print(f"[{number}/{len(jobs)}] skip complete {job.job_id}")
             continue
-        job_resume = resume and last.exists()
-        if last.exists() and not resume:
+        existing_files = (
+            {path.name for path in run_dir.iterdir()} if run_dir.exists() else set()
+        )
+        if existing_files and not resume:
             raise SystemExit(
-                f"{job.job_id} has last.pt but no best.pt; rerun with --resume"
+                f"{job.job_id} has an incomplete run directory; rerun with --resume"
             )
+        if existing_files and not last.exists():
+            unexpected = existing_files - PRECHECKPOINT_FILES
+            if unexpected:
+                raise SystemExit(
+                    f"{job.job_id} has no resumable last.pt and its run directory "
+                    "contains unexpected files: " + ", ".join(sorted(unexpected))
+                )
+        # --resume also tells train.py that this exact non-empty directory is
+        # intentional. If only args.json or an interrupted atomic-write temp
+        # file exists, train.py safely starts again from epoch zero.
+        job_resume = resume and bool(existing_files)
         command = train_command(config, job, resume=job_resume)
         print(f"[{number}/{len(jobs)}] {_command_text(command)}", flush=True)
         if dry_run:

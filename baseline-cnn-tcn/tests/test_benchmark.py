@@ -96,6 +96,35 @@ class BenchmarkConfigTests(unittest.TestCase):
                 (isolated.output_root / "jobs" / f"{job.job_id}.json").exists()
             )
 
+    def test_runner_restarts_a_failure_before_the_first_checkpoint(self):
+        config = load_config(DEFAULT_CONFIG)
+        with tempfile.TemporaryDirectory() as temporary:
+            isolated = replace(config, output_root=Path(temporary) / "benchmark")
+            job = isolated.jobs()[0]
+            run_dir = isolated.run_dir(job)
+            run_dir.mkdir(parents=True)
+            (run_dir / "args.json").write_text("{}")
+            with (
+                patch("breathing_cnn_tcn.benchmark.preflight"),
+                patch("breathing_cnn_tcn.benchmark._git_provenance", return_value={}),
+                patch("breathing_cnn_tcn.benchmark.subprocess.run") as run,
+            ):
+                run_jobs(isolated, [job], resume=True, dry_run=False)
+            command = run.call_args.args[0]
+            self.assertIn("--resume", command)
+
+    def test_runner_refuses_unknown_files_without_a_checkpoint(self):
+        config = load_config(DEFAULT_CONFIG)
+        with tempfile.TemporaryDirectory() as temporary:
+            isolated = replace(config, output_root=Path(temporary) / "benchmark")
+            job = isolated.jobs()[0]
+            run_dir = isolated.run_dir(job)
+            run_dir.mkdir(parents=True)
+            (run_dir / "unrelated.txt").write_text("keep me")
+            with patch("breathing_cnn_tcn.benchmark.preflight"):
+                with self.assertRaisesRegex(SystemExit, "unexpected files"):
+                    run_jobs(isolated, [job], resume=True, dry_run=False)
+
     def test_collector_writes_one_strict_json_artifact(self):
         config = load_config(DEFAULT_CONFIG)
         with tempfile.TemporaryDirectory() as temporary:
