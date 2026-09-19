@@ -19,9 +19,17 @@ CLI
 import argparse
 import json
 import math
+import os
 import random
+import sys
 import time
 from pathlib import Path
+
+# CUDA deterministic convolutions need this before torch initializes cuBLAS.
+# The benchmark launcher also supplies it, while this covers direct invocations
+# of ``python -m breathing_cnn_tcn.train --deterministic``.
+if "--deterministic" in sys.argv:
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import numpy as np
 import pandas as pd
