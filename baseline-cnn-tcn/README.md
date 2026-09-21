@@ -138,10 +138,10 @@ retains two important strata: six recordings from new animals and six new dates
 from animals represented in training.
 
 The checked-in [`benchmark.toml`](artifacts/benchmark.toml) expands four input
-representations (`gray`, `diff`, `flow`, `gray+flow`) by two objectives
-(signal-only and signal+onset multitask) by five seeds: 40 jobs. Add
-`"gray+diff+flow"` to `representations` if the current all-channel default should
-be included as a fifth reference level.
+representations (`gray`, `gray+diff`, `gray+flow`, `gray+diff+flow`) by two
+objectives (signal-only and signal+onset multitask) by five seeds: 40 jobs. This
+is a cumulative ablation around the grayscale frames: temporal difference and
+optical flow are tested separately and together, but never without grayscale.
 
 Download only the face camera and overlay the private test thermistors without
 flattening the train/test directories:

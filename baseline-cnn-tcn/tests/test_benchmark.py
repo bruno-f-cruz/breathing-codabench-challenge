@@ -25,7 +25,8 @@ class BenchmarkConfigTests(unittest.TestCase):
         self.assertEqual(len(jobs), 40)
         self.assertEqual(len({job.job_id for job in jobs}), 40)
         self.assertEqual(
-            set(config.representations), {"gray", "diff", "flow", "gray+flow"}
+            set(config.representations),
+            {"gray", "gray+diff", "gray+flow", "gray+diff+flow"},
         )
         self.assertEqual(set(config.seeds), {17, 42, 101, 202, 314})
 
@@ -34,7 +35,7 @@ class BenchmarkConfigTests(unittest.TestCase):
         job = next(
             job
             for job in config.jobs()
-            if job.representation == "gray+flow"
+            if job.representation == "gray+diff+flow"
             and job.objective.name == "multitask"
             and job.seed == 17
         )
@@ -42,7 +43,9 @@ class BenchmarkConfigTests(unittest.TestCase):
         self.assertIn("--val-fraction", command)
         self.assertEqual(command[command.index("--val-fraction") + 1], "0")
         self.assertIn("--no-reserve-test-sessions", command)
-        self.assertEqual(command[command.index("--channels") + 1], "gray+flow")
+        self.assertEqual(
+            command[command.index("--channels") + 1], "gray+diff+flow"
+        )
         self.assertEqual(command[command.index("--w-onset") + 1], "0.5")
         self.assertNotIn("--resume", command)
 

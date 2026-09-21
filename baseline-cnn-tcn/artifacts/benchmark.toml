@@ -15,7 +15,7 @@ steps_per_epoch = 200
 device = "cuda"
 amp = "bf16"
 
-representations = ["gray", "diff", "flow", "gray+flow"]
+representations = ["gray", "gray+diff", "gray+flow", "gray+diff+flow"]
 seeds = [17, 42, 101, 202, 314]
 
 [objectives.signal]
